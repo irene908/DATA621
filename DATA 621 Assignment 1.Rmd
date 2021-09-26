@@ -1,0 +1,288 @@
+---
+title: "DATA621 Assignment 1"
+author: "Irene Jacob"
+date: "9/18/2021"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(ggplot2)
+library(corrplot)
+library("base")
+library(MASS)
+library(rpart.plot)
+library(forecast)
+library(GGally)
+library(tibble)
+library(tidyr)
+library(tidyverse)
+library(dplyr)
+library(reshape2)
+library(tidymodels)
+```
+
+# Assignment 1
+
+## 1. Data Exploration
+
+```{r}
+train <- read.csv("https://raw.githubusercontent.com/irene908/DATA621/main/moneyball-training-data.csv") %>%select(-INDEX)
+  
+test <- read.csv("https://raw.githubusercontent.com/irene908/DATA621/main/moneyball-evaluation-data.csv") %>%select(-INDEX)
+```
+
+```{r}
+dim(train)
+```
+
+```{r}
+summary(train)
+```
+
+```{r}
+train %>% gather() %>% ggplot(aes(x= value)) + geom_density(fill='light blue') + facet_wrap(~key, scales = 'free')
+```
+
+
+```{r}
+
+train_new <- train %>% gather(key = 'key', value = 'value')
+
+ggplot(train_new,aes(x = key, y = value)) +geom_boxplot()+coord_cartesian(ylim = c(0, 1000))+ theme(axis.text.x=element_text(angle=45, hjust=1))
+```
+
+```{r,fig.height = 7, fig.width = 7}
+train %>% cor(., use = "complete.obs") %>% corrplot(., type = "upper", diag = FALSE)
+```
+
+
+```{r,fig.height = 7, fig.width = 7}
+
+train %>% gather(key, value, -TARGET_WINS) %>% ggplot(., aes(value, TARGET_WINS)) +  geom_point( color="purple") + geom_smooth(method = "lm", se = FALSE, color = "black") + facet_wrap(~key, scales ="free", ncol = 3) 
+```
+
+```{r}
+
+train %>% gather(key, value) %>% filter(is.na(value)) %>% group_by(key) %>% tally() %>% mutate(p = n / nrow(train) * 100) %>% mutate(p = paste0(round(p, ifelse(p < 10, 1, 0)), "%")) %>% arrange(desc(n)) %>% rename(`Variable` = key, `Count` = n, `Percentage` = p) 
+
+```
+## 2. Data Preparation
+
+Handling missing data
+
+```{r}
+# Drop the BATTING_HBP field
+train <- train %>% select(-TEAM_BATTING_HBP)
+
+train_new <- train
+
+train_new$TEAM_PITCHING_SO <- ifelse(train_new$TEAM_PITCHING_SO > 4000, NA, train_new$TEAM_PITCHING_SO)
+
+train_new$TEAM_PITCHING_H <- ifelse(train_new$TEAM_PITCHING_H > 5000, NA, train_new$TEAM_PITCHING_H)
+
+train_new$TEAM_PITCHING_BB <- ifelse(train_new$TEAM_PITCHING_BB > 2000, NA, train_new$TEAM_PITCHING_BB)
+
+train_new$TEAM_FIELDING_E <- ifelse(train_new$TEAM_FIELDING_E > 480, NA, train_new$TEAM_FIELDING_E)
+
+```
+
+```{r}
+
+for(i in 1:ncol(train_new)){
+  train_new[is.na(train_new[,i]), i] <- mean(train_new[,i], na.rm = TRUE)
+}
+
+train_new <- train_new %>% 
+  filter(TARGET_WINS != 0)
+
+```
+
+
+```{r}
+
+summary(train_new)
+```
+
+
+
+### Feature Engineering
+
+```{r}
+
+single_Feature <- function(df){ df %>% mutate(TEAM_BATTING_1B = TEAM_BATTING_H - TEAM_BATTING_2B - TEAM_BATTING_3B - TEAM_BATTING_HR) }
+
+train_new <- single_Feature(train_new)
+test <- single_Feature(test)
+```
+
+### View the final prepared data
+
+```{r}
+
+train_new %>% gather(key, value) %>% ggplot(., aes(value)) + geom_density(fill='blue') + facet_wrap(~key, scales ="free")
+
+```
+
+```{r}
+
+#summary of the prepared train data
+
+summary(train_new)
+
+```
+
+
+
+
+### Transformation
+
+```{r echo=FALSE, fig.width=15, message=FALSE, warning=FALSE}
+
+# created empty data frame to store transformed variables
+train_temp <- data.frame(matrix(ncol = 1, nrow = length(train_new$TARGET_WINS)))
+
+# performed boxcox transformation after identifying proper lambda
+train_temp$TEAM_BATTING_3B <- train_new$TEAM_BATTING_3B
+BATTING_3B_Lambda <- BoxCox.lambda(train_new$TEAM_BATTING_3B)
+train_temp$BATTING_3B <- log(train_new$TEAM_BATTING_3B)
+
+# performed boxcox transformation after identifying proper lambda
+train_temp$TEAM_BATTING_HR <- train_new$TEAM_BATTING_HR
+BATTING_HR_Lambda <- BoxCox.lambda(train_new$TEAM_BATTING_HR)
+train_temp$BATTING_HR <- BoxCox(train_new$TEAM_BATTING_HR, BATTING_HR_Lambda)
+
+# performed a log transformation
+train_temp$TEAM_PITCHING_BB <- train_new$TEAM_PITCHING_BB
+train_temp$PITCHING_BB <- log(train_new$TEAM_PITCHING_BB)
+
+# performed a log transformation
+train_temp$TEAM_PITCHING_SO <- train_new$TEAM_PITCHING_SO
+train_temp$PITCHING_SO <- log(train_new$TEAM_PITCHING_SO)
+
+# performed an inverse log transformation
+train_temp$TEAM_FIELDING_E <- train_new$TEAM_FIELDING_E
+train_temp$FIELDING_E <- 1/log(train_new$TEAM_FIELDING_E)
+
+# performed a log transformation
+train_temp$TEAM_BASERUN_SB <- train_new$TEAM_BASERUN_SB
+train_temp$BASERUN_SB <- log(train_new$TEAM_BASERUN_SB)
+
+train_temp <- train_temp[, 2:13]
+train_tmp <- train_temp %>% gather(key = 'key', value = 'value')
+
+
+ggplot(train_tmp, aes(x=value)) + geom_density() + geom_histogram() + facet_wrap(~key, scales ="free", ncol = 6)
+
+#hist(train_temp)
+```
+
+### Finalizing the dataset for model building 
+
+
+```{r}
+# Build clean dataframe with transformation
+
+train_new <- data.frame(cbind(train_new, BATTING_3B = train_temp$BATTING_3B, BATTING_HR = train_temp$BATTING_HR,BASERUN_SB = train_temp$BASERUN_SB, PITCHING_BB = train_temp$PITCHING_BB, PITCHING_SO = train_temp$PITCHING_SO, FIELDING_E = train_temp$FIELDING_E))
+
+is.na(train_new) <- sapply(train_new, is.infinite)
+
+# Impute missing value with the mean
+
+train_new$BATTING_3B[is.na(train_new$BATTING_3B)] <- mean(train_new$BATTING_3B, na.rm = TRUE)
+train_new$BASERUN_SB[is.na(train_new$BASERUN_SB)] <- mean(train_new$BASERUN_SB, na.rm = TRUE)
+train_new$PITCHING_SO[is.na(train_new$PITCHING_SO)] <- mean(train_new$PITCHING_SO, na.rm = TRUE)
+```
+
+
+## 3. Build models
+
+```{r}
+x<-c(1,17,18,19,20,21,22)
+train_df <- train_new[,x]
+train_new <- train_new[,1:16]
+
+```
+
+### Simple model using the transformed data
+
+selecting a few high correlation variables
+
+```{r}
+colnames(train_df)<- c('TARGET_WINS','TEAM_BATTING_3B','TEAM_BATTING_HR', 'TEAM_BASERUN_SB', 'TEAM_PITCHING_BB', 'TEAM_PITCHING_SO', 'TEAM_FIELDING_E')
+train_simple <- lm(TARGET_WINS ~ TEAM_BATTING_HR + TEAM_PITCHING_BB + TEAM_FIELDING_E, data = train_df)
+summary(train_simple)
+par(mfrow = c(2, 2))
+plot(train_simple)
+```
+
+### Simple model without the transformed data
+
+```{r}
+
+train_simple_t <- lm(TARGET_WINS ~ TEAM_BATTING_HR + TEAM_PITCHING_BB + TEAM_FIELDING_E, data = train_new)
+summary(train_simple_t)
+par(mfrow = c(2, 2))
+plot(train_simple_t)
+
+````
+
+### Full model without the transformed data
+
+```{r}
+train_full <- lm(TARGET_WINS ~., data = train_new)
+summary(train_full)
+par(mfrow = c(2, 2))
+plot(train_full)
+```
+
+
+
+### Polynomial Regression without the transformed data
+
+```{r}
+
+train_poly <- "TARGET_WINS ~ TEAM_BATTING_1B + TEAM_BATTING_2B + TEAM_BATTING_3B + TEAM_BATTING_HR + TEAM_BATTING_BB + TEAM_BATTING_SO + TEAM_BASERUN_SB + TEAM_BASERUN_CS + TEAM_PITCHING_H + TEAM_PITCHING_HR + TEAM_PITCHING_BB + TEAM_PITCHING_SO + TEAM_FIELDING_E + TEAM_FIELDING_DP + I(TEAM_BATTING_1B^2)+ I(TEAM_BATTING_2B^2) + I(TEAM_BATTING_3B^2) + I(TEAM_BATTING_HR^2) + I(TEAM_BATTING_BB^2) + I(TEAM_BATTING_SO^2) + I(TEAM_BASERUN_SB^2) + I(TEAM_BASERUN_CS^2) + I(TEAM_PITCHING_H^2) + I(TEAM_PITCHING_HR^2) + I(TEAM_PITCHING_BB^2) + I(TEAM_PITCHING_SO^2) + I(TEAM_FIELDING_E^2) + I(TEAM_FIELDING_DP^2)  + I(TEAM_BATTING_1B^3)+ I(TEAM_BATTING_2B^3) + I(TEAM_BATTING_3B^3) + I(TEAM_BATTING_HR^3) + I(TEAM_BATTING_BB^3) + I(TEAM_BATTING_SO^3) + I(TEAM_BASERUN_SB^3) + I(TEAM_BASERUN_CS^3) + I(TEAM_PITCHING_H^3) + I(TEAM_PITCHING_HR^3) + I(TEAM_PITCHING_BB^3) + I(TEAM_PITCHING_SO^3) + I(TEAM_FIELDING_E^3) + I(TEAM_FIELDING_DP^3)  +I(TEAM_BATTING_1B^4) + I(TEAM_BATTING_2B^4) + I(TEAM_BATTING_3B^4) + I(TEAM_BATTING_HR^4) + I(TEAM_BATTING_BB^4) + I(TEAM_BATTING_SO^4) + I(TEAM_BASERUN_SB^4) + I(TEAM_BASERUN_CS^4) + I(TEAM_PITCHING_H^4) + I(TEAM_PITCHING_HR^4) + I(TEAM_PITCHING_BB^4) + I(TEAM_PITCHING_SO^4) + I(TEAM_FIELDING_E^4) + I(TEAM_FIELDING_DP^4) "
+train_poly_lm <- lm(train_poly, train_new)
+train_poly_lm_stepback <- MASS::stepAIC(train_poly_lm, direction="backward", trace = F)
+train_poly_lm_call <- summary(train_poly_lm_stepback)$call
+train_poly_lm_stepback <- lm(train_poly_lm_call[2], train_new)
+summary(train_poly_lm_stepback)
+par(mfrow = c(2, 2))
+plot(train_poly_lm_stepback)
+```
+
+### excluding variables with Multicollinearity
+
+```{r}
+train_multi <- lm(TARGET_WINS ~.- TEAM_BATTING_SO- TEAM_PITCHING_BB- TEAM_PITCHING_H- TEAM_PITCHING_HR, data = train_new)
+summary(train_multi)
+par(mfrow = c(2, 2))
+plot(train_multi)
+
+```
+
+### Excluding variables having insignificant p values
+
+```{r}
+
+train_p <- lm(TARGET_WINS ~.- TEAM_BATTING_SO - TEAM_PITCHING_BB - TEAM_PITCHING_H - TEAM_PITCHING_HR - TEAM_BASERUN_CS, data = train_new)
+summary(train_p)
+par(mfrow = c(2, 2))
+plot(train_p)
+
+```
+
+
+## 4. Select Model
+
+```{r}
+test$TARGET_WINS <- round(predict(train_poly_lm_stepback, test), 0)
+```
+
+
+```{r}
+write.csv(test,"DATA621_Assignment1.csv")
+```
