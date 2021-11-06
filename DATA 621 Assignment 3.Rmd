@@ -253,7 +253,7 @@ library("pROC")
 
 train$predict <- predict(full_model, train, type='response')
 
-plot(roc(train$target, train$predict,col="maroon"), print.auc = TRUE, main = 'ROC')
+plot(roc(train$target, train$predict), print.auc = TRUE, main = 'ROC')
 
 ```
 
