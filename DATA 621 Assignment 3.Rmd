@@ -1,0 +1,268 @@
+---
+title: "DATA 621 Assignment 3"
+author: "Irene Jacob"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(ggplot2)
+library(corrplot)
+library("base")
+library(MASS)
+library(rpart.plot)
+library(forecast)
+library(GGally)
+library(tibble)
+library(tidyr)
+library(tidyverse)
+library(dplyr)
+library(reshape2)
+library(tidymodels)
+library("pastecs")
+library("funModeling")
+library(caret)
+
+```
+
+# Assignment 3
+
+## 1. Data Exploration
+
+```{r}
+
+train <- read.csv("https://raw.githubusercontent.com/irene908/DATA621/main/crime-training-data_modified.csv")
+
+```
+
+```{r}
+
+dim(train)
+
+```
+
+```{r}
+
+head(train)
+summary(train)
+
+stat.desc(train)
+
+```
+
+
+```{r}
+
+train %>% gather() %>% ggplot(aes(x= value)) + geom_density(fill='light blue') + facet_wrap(~key, scales = 'free')
+
+```
+
+```{r}
+
+train_new <- train %>% gather(key = 'key', value = 'value')
+
+ggplot(train_new,aes(x = key, y = value)) +geom_boxplot()+ theme(axis.text.x=element_text(angle=45, hjust=1))
+
+```
+
+```{r,fig.height = 7, fig.width = 7}
+
+train %>% cor(., use = "complete.obs") %>% corrplot(., type = "upper", diag = FALSE)
+
+```
+
+```{r}
+
+test <- read.csv("https://raw.githubusercontent.com/irene908/DATA621/main/crime-evaluation-data_modified.csv")
+
+```
+
+```{r}
+
+dim(test)
+
+```
+
+```{r}
+
+head(test)
+summary(test)
+
+stat.desc(test)
+
+```
+
+
+```{r}
+
+test %>% gather() %>% ggplot(aes(x= value)) + geom_density(fill='light blue') + facet_wrap(~key, scales = 'free')
+
+```
+
+```{r}
+
+test_new <- test %>% gather(key = 'key', value = 'value')
+
+ggplot(test_new,aes(x = key, y = value)) +geom_boxplot()+ theme(axis.text.x=element_text(angle=45, hjust=1))
+
+```
+
+```{r,fig.height = 7, fig.width = 7}
+
+test %>% cor(., use = "complete.obs") %>% corrplot(., type = "upper", diag = FALSE)
+
+```
+
+## 2. Data Preparation
+
+
+```{r}
+df_status(train)
+df_status(test)
+
+#NA check
+apply(train, 2, function(x) any(is.na(x)))
+apply(test, 2, function(x) any(is.na(x)))
+
+#training data in different buckets
+
+zn_train_buckt<-train[,'zn']
+summary(zn_train_buckt)
+zn_train_buckt
+
+indus_train_buckt<-train[,'indus']
+summary(indus_train_buckt)
+indus_train_buckt
+
+#cbind zn and indus
+indus_zn_train_buckt<-cbind(train$zn,train$indus)
+summary(indus_zn_train_buckt)
+indus_zn_train_buckt
+```
+
+```{r}
+library("ggplot2")
+library("corrgram")
+
+corrgram(train, order=NULL, panel=panel.shade, text.panel=panel.txt)
+```
+
+```{r,fig.height = 7, fig.width = 7}
+pairs(~zn+indus+nox+rm+age+dis+rad+tax+ptratio,data=train,gap=0.4,cex.labels=1.5)
+
+```
+
+
+```{r}
+
+boxplot(zn~target, data=train, ylab="zn")
+boxplot(indus~target, data=train, ylab="indus")
+boxplot(chas~target, data=train, ylab="chas")
+boxplot(nox~target, data=train, ylab="nox")
+boxplot(rm~target, data=train, ylab="rm")
+boxplot(dis~target, data=train, ylab="dis")
+boxplot(age~target, data=train, ylab="age")
+boxplot(rad~target, data=train, ylab="rad")
+boxplot(tax~target, data=train, ylab="tax")
+boxplot(ptratio~target, data=train, ylab="ptratio")
+boxplot(lstat~target, data=train, ylab="lstat")
+boxplot(medv~target, data=train, ylab="medv")
+
+```
+
+```{r}
+
+library(leaps)
+
+train_subsets <-regsubsets(target~.,data=train,nvmax=13) # cosidering all 13 variables to find the best fit subsets regression model
+
+train_subsets_smry=summary(train_subsets)
+
+plot(train_subsets,scale="Cp") # Display the data consistency and less important variable have higher Cp value(bottom)
+
+```
+
+## 3. Build Models
+
+### Simple model
+
+
+```{r,fig.height = 10, fig.width = 10}
+
+simple_model <- glm(target ~ nox, family = binomial(link = "logit"), train)
+summary(simple_model)
+
+par(mfrow = c(2, 2))
+plot(simple_model)
+
+```
+
+
+### Full model
+
+```{r,fig.height = 10, fig.width = 10}
+
+full_model <- glm(target ~ ., family = binomial(link = "logit"), train)
+summary(full_model)
+
+par(mfrow = c(2, 2))
+plot(full_model)
+
+```
+
+### Backward elimination model
+
+This model is derived after some backward elimination
+
+```{r,fig.height = 10, fig.width = 10}
+
+backward_model <- glm(target ~ . -tax -rm -chas - age -zn -indus, family = binomial(link = "logit"), train)
+summary(backward_model)
+
+par(mfrow = c(2, 2))
+plot(backward_model)
+
+```
+
+### Model from the subsets
+
+```{r}
+
+which.min(train_subsets_smry$cp) # number of variables to choose
+
+coef(train_subsets,5) 
+
+train_model <- glm(target ~ nox + age + rad + ptratio + medv, family=binomial(link = "logit"), data = train) 
+summary(train_model) 
+
+```
+
+```{r,fig.height = 10, fig.width = 10}
+
+par(mfrow = c(2, 2))
+plot(train_model)
+
+```
+
+## 4. Select Model
+
+selecting the full model as it has the lowest AIC and deviance of all the 4 models
+
+```{r}
+library("pROC")
+
+train$predict <- predict(full_model, train, type='response')
+
+plot(roc(train$target, train$predict,col="maroon"), print.auc = TRUE, main = 'ROC')
+
+```
+
+```{r}
+test$target <- round(predict(full_model, test), 0)
+test$target <- ifelse(test$target<.5,0,1)
+```
+
+
+```{r}
+write.csv(test,"DATA621_Assignment3.csv")
+```
